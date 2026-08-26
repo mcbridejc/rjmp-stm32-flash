@@ -40,7 +40,8 @@ pub use embedded_io;
 #[cfg(not(any(
     feature = "stm32g431xb",
     feature = "stm32g431x8",
-    feature = "stm32g431x6"
+    feature = "stm32g431x6",
+    feature = "stm32l552rc"
 )))]
 compile_error!("No chip feature is enabled for rjmp-stm32-flash");
 
@@ -49,5 +50,20 @@ pub(crate) mod fletcher16;
 pub use dual_page::*;
 mod dual_persist;
 pub use dual_persist::*;
+#[cfg(any(
+    feature = "stm32g431xb",
+    feature = "stm32g431x8",
+    feature = "stm32g431x6"
+))]
 pub mod flash_gx;
+#[cfg(any(
+    feature = "stm32g431xb",
+    feature = "stm32g431x8",
+    feature = "stm32g431x6"
+))]
 pub use flash_gx::*;
+
+#[cfg(feature = "stm32l552rc")]
+pub mod flash_l5;
+#[cfg(feature = "stm32l552rc")]
+pub use flash_l5::*;
