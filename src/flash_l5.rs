@@ -1,8 +1,9 @@
 //! Flash driver for the non-secure flash interface on STM32L5 devices.
 //!
-//! The STM32L552RC is 256 KiB and uses 4 KiB erase pages in its default
-//! single-bank configuration. Programming is performed one 64-bit double word
-//! at a time through the non-secure FLASH registers.
+//! The STM32L552RC is 256 KiB and uses 128 2 KiB pages in its default dual-bank
+//! configuration. Page numbers 0-63 select a page within a bank and NSBKER
+//! selects the bank. Programming is performed one 64-bit double word at a time
+//! through the non-secure FLASH registers.
 
 use core::{
     ptr::slice_from_raw_parts,
@@ -14,9 +15,10 @@ use stm32_metapac as pac;
 
 use crate::dual_page::{DualPageFlash, Page};
 
-pub const STM32L552_PAGE_SIZE: usize = 4096;
+pub const STM32L552_PAGE_SIZE: usize = 2048;
 const FLASH_BASE: usize = 0x0800_0000;
-const NUM_PAGES: usize = 64;
+const PAGES_PER_BANK: usize = 64;
+const NUM_PAGES: usize = PAGES_PER_BANK * 2;
 const FLASH_SIZE: usize = STM32L552_PAGE_SIZE * NUM_PAGES;
 const WRITE_SIZE: usize = 8;
 
@@ -106,16 +108,14 @@ fn clear_errors() {
 }
 
 fn erase_physical_page(page_num: usize) {
-    assert!(page_num < 128);
+    assert!(page_num < NUM_PAGES);
     unlock_flash();
     wait_busy();
     clear_errors();
 
     pac::FLASH.nscr().modify(|w| {
-        // This driver currently addresses bank 1 only. In dual-bank mode the
-        // caller converts each 4 KiB logical page into two 2 KiB physical pages.
-        w.set_nsbker(false);
-        w.set_nspnb(page_num as u8);
+        w.set_nsbker(page_num >= PAGES_PER_BANK);
+        w.set_nspnb((page_num % PAGES_PER_BANK) as u8);
         w.set_nsper(true);
     });
     pac::FLASH.nscr().modify(|w| w.set_nsstrt(true));
@@ -162,18 +162,8 @@ impl WriteRegion {
     }
 
     fn erase(&mut self) {
-        let dual_bank = pac::FLASH.optr().read().dbank();
         for page in self.region.start_page..self.region.start_page + self.region.size {
-            if dual_bank {
-                // DBANK changes the erase granularity from 4 KiB to 2 KiB and
-                // consequently doubles the page number for the same address.
-                // The reserved canshunt pages are in bank 1.
-                assert!(page < NUM_PAGES / 2);
-                erase_physical_page(page * 2);
-                erase_physical_page(page * 2 + 1);
-            } else {
-                erase_physical_page(page);
-            }
+            erase_physical_page(page);
         }
     }
 
@@ -235,7 +225,17 @@ pub struct Stm32l5PagePair {
 }
 
 impl Stm32l5PagePair {
+    /// create a new page pair
+    ///
+    /// # Arguments
+    /// start_a: The starting page number for first flash section
+    /// start_b: The starting page number for second flash section
+    /// size: The number of pages in each section
     pub fn new(start_a: usize, start_b: usize, size: usize) -> Self {
+        assert!(
+            pac::FLASH.optr().read().dbank(),
+            "Stm32l5PagePair requires dual-bank mode"
+        );
         assert!(size > 0);
         assert!(start_a + size <= NUM_PAGES);
         assert!(start_b + size <= NUM_PAGES);
